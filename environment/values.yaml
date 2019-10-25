@@ -1,0 +1,368 @@
+notebookHost: &notebookHost dba.projects.sda.surfsara.nl
+apiHost: &apiHost dba-api.projects.sda.surfsara.nl
+portalHost: &portalHost dba-portal.projects.sda.surfsara.nl
+
+ldapBase: &ldapBase dc=dba
+ldapDomain: &ldapDomain "dba"
+ldapRootBind: &ldapRootBind cn=admin,dc=dba
+ldapBind: &ldapBind 'cn={username},ou=users,dc=dba'
+ldapServer: &ldapServer ldap://dba-openldap:389
+wildCard: &wildCard wildcard-projects-sda-surfsara-nl
+image: &image haukurp/dba-r-keras
+tag: &tag '1,1'
+# See readme.md for light, medium and heavy mappings to CPU and Memory
+cpu: &cpu 8
+memory: &memory 16G
+storage: &storage 30Gi
+uidStart: &uidStart 5000
+uidEnd: &uidEnd 5100
+
+jupyterhub:
+  hub:
+    service:
+      type: ClusterIP
+      ports:
+        nodePort:
+      loadBalancerIP:
+    baseUrl: /
+    cookieSecret:
+    publicURL:
+    uid: 1000
+    fsGid: 1000
+    nodeSelector: {}
+    concurrentSpawnLimit: 64
+    consecutiveFailureLimit: 5
+    activeServerLimit:
+    deploymentStrategy:
+      # sqlite-pvc backed hub requires Recreate strategy to work
+      type: Recreate
+      # This is required for upgrading to work
+      rollingUpdate:
+    db:
+      type: sqlite-pvc
+      upgrade:
+      pvc:
+        annotations: {}
+        selector: {}
+        accessModes:
+        - ReadWriteOnce
+        storage: 1Gi
+        subPath:
+        storageClassName: "slow"
+      url:
+      password:
+    labels: 
+      team: sda
+      service: jupyterhub
+    annotations:
+      prometheus.io/scrape: 'true'
+      prometheus.io/path: /hub/metrics
+    extraConfigMap: {}
+    extraEnv: {}
+    extraContainers: []
+    extraVolumes: []
+    extraVolumeMounts: []
+    image:
+      name: jupyterhub/k8s-hub
+      tag: 0.7.0
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+    services: {}
+    imagePullPolicy: IfNotPresent
+    imagePullSecret:
+      enabled: false
+      registry:
+      username:
+      email:
+      password:
+    pdb:
+      enabled: false
+      minAvailable: 1
+    networkPolicy:
+      enabled: false
+      egress:
+      - to:
+          - ipBlock:
+              cidr: 0.0.0.0/0
+    allowNamedServers: false
+    extraConfig: {}
+      
+  rbac:
+    enabled: true
+  
+  ingress:
+    enabled: true
+    annotations: 
+      kubernetes.io/ingress.class: nginx-external
+      nginx.ingress.kubernetes.io/proxy-body-size: 500m
+    hosts:
+      - *notebookHost
+    tls:
+      - hosts:
+        - *notebookHost
+        secretName: *wildCard
+  
+  proxy:
+    secretToken: d34cb33c3174a728825d97073bdeaab2d43ef67bb485415d719e88e13606b7d5
+    service:
+      type: NodePort
+      labels: 
+        team: sda
+        service: jupyterhub
+      annotations: {}
+      nodePorts:
+        http:
+        https:
+    chp:
+      image:
+        name: jupyterhub/configurable-http-proxy
+        tag: 3.0.0
+        pullPolicy: IfNotPresent
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+    nginx:
+      image:
+        name: quay.io/kubernetes-ingress-controller/nginx-ingress-controller
+        tag: 0.15.0
+        pullPolicy: IfNotPresent
+      proxyBodySize: 64m
+      resources: {}
+    lego:
+      image:
+        name: jetstack/kube-lego
+        tag: 0.1.6
+        pullPolicy: IfNotPresent
+      resources: {}
+    labels: 
+      team: sda
+      service: jupyterhub
+    nodeSelector: {}
+    pdb:
+      enabled: false
+    https:
+      enabled: false
+      type: letsencrypt
+      #type: letsencrypt, manual, secret
+      letsencrypt:
+        contactEmail: ''
+      manual:
+        key:
+        cert:
+      secret:
+        name: ''
+        key: ''
+        crt: ''
+      hosts: []
+    networkPolicy:
+      enabled: false
+      egress:
+        - to:
+            - ipBlock:
+                cidr: 0.0.0.0/0
+
+  singleuser:
+    networkTools:
+      image:
+        name: jupyterhub/k8s-network-tools
+        tag: '0.7.0'
+    cloudMetadata:
+      enabled: false
+      ip: 169.254.169.254
+    networkPolicy:
+      enabled: false
+      egress:
+      # Required egress is handled by other rules so it's safe to modify this
+        - to:
+            - ipBlock:
+                cidr: 0.0.0.0/0
+                except:
+                  - 169.254.169.254/32
+    events: true
+    extraAnnotations: {}
+    extraLabels: 
+      team: sda
+      service: jupyterhub
+    extraEnv: {}
+    lifecycleHooks:
+      postStart:
+        exec:
+          command:
+            - "sh"
+            - "-c"
+            - >
+             gitpuller https://git.ia.surfsara.nl/sda/courseware/dba.git master material;
+
+    initContainers:
+    nodeSelector: {}
+    uid: 1000
+    fsGid: 100
+    serviceAccountName:
+    schedulerStrategy:
+    storage:
+      type: dynamic
+      extraVolumes: []
+      extraVolumeMounts: []
+      static:
+        pvcName:
+        subPath: '{username}'
+      capacity: *storage
+      homeMountPath: /home/jovyan
+      dynamic:
+        storageClass: "slow"
+        pvcNameTemplate: claim-{username}{servername}
+        volumeNameTemplate: volume-{username}{servername}
+        storageAccessModes: [ReadWriteOnce]
+    image:
+      name: *image
+      tag: *tag
+      pullPolicy: IfNotPresent
+    imagePullSecret:
+      enabled: false
+      registry:
+      username:
+      email:
+      password:
+    startTimeout: 300
+    cpu:
+      limit: *cpu
+      guarantee: *cpu
+    memory:
+      limit: *memory
+      guarantee: *memory
+    extraResource:
+      limits: {}
+      guarantees: {}
+    cmd: jupyterhub-singleuser
+    defaultUrl:
+
+    
+  auth:
+    type: ldap
+    whitelist:
+      users:
+    admin:
+      access: true
+      users:
+    dummy:
+      password:
+    ldap:
+      server:
+        address: *ldapServer 
+        port: 389
+      dn:
+        templates:
+          - *ldapBind
+        search: {}
+        user: {}
+      user: {}
+    state:
+      enabled: false
+      cryptoKey:
+
+  prePuller:
+    hook:
+      enabled: true
+      extraEnv: {}
+      image:
+        name: jupyterhub/k8s-image-awaiter
+        tag: '0.7.0'
+    continuous:
+      enabled: true
+    extraImages: []
+    pause:
+      image:
+        name: gcr.io/google_containers/pause
+        tag: '3.0'
+  
+      
+openldap:
+  env:
+    LDAP_DOMAIN: *ldapDomain
+    LDAP_BASE_DN: *ldapBase
+  customLdifFiles:
+    01-inital-users.ldif: |-
+      dn: ou=groups,{{ LDAP_BASE_DN }}
+      changetype: add
+      objectClass: organizationalUnit
+      objectClass: top
+      ou: groups
+
+      dn: cn=admin,ou=groups,{{ LDAP_BASE_DN }}
+      changetype: add
+      gidNumber: 501
+      cn: admin
+      objectClass: posixGroup
+      objectClass: top
+      memberUid:
+
+      dn: cn=user,ou=groups,{{ LDAP_BASE_DN }}
+      changetype: add
+      gidNumber: 500
+      cn: user
+      objectClass: posixGroup
+      objectClass: top
+      memberUid: smoketest
+
+      dn: ou=users,{{ LDAP_BASE_DN }}
+      changetype: add
+      objectClass: organizationalUnit
+      objectClass: top
+      ou: users
+
+      dn: cn=smoketest,ou=users,{{ LDAP_BASE_DN }}
+      changetype: add
+      cn: smoketest
+      givenName: smoketest
+      gidNumber: 500
+      homeDirectory: /home/users/smoketest
+      sn: smoketest
+      objectClass: inetOrgPerson
+      objectClass: posixAccount
+      objectClass: top
+      userPassword:: e01ENX1FWVpWWWcrbFlRVktNcStrT0ZySXZnPT0=
+      uidNumber: 1002
+      uid: smoketest
+
+      dn: cn=portaladmin,ou=users,{{ LDAP_BASE_DN }}
+      changetype: add
+      cn: portaladmin
+      givenName: portaladmin
+      gidNumber: 501
+      homeDirectory: /home/users/portaladmin
+      sn: smoketest
+      objectClass: inetOrgPerson
+      objectClass: posixAccount
+      objectClass: top
+      userPassword:: e01ENX1FS3lsbU5kNmNmVEdNZ0lRT3VKa2V3PT0K
+      uidNumber: 1003
+      uid: portaladmin
+
+      dn: cn=admin,ou=groups,{{ LDAP_BASE_DN }}
+      changetype: modify
+      add: memberUid
+      memberUid: portaladmin
+
+
+usermgmtapi:
+  usermgmtapi:
+    ingress:
+      dns: *apiHost
+    openldap:
+      provider: *ldapServer
+      base_dn: *ldapBase
+      root_dn: *ldapRootBind
+    api:
+      uid_range_first: *uidStart
+      uid_range_last: *uidEnd
+
+usermgmtportal:
+  usermgmtportal:
+    ingress:
+      dns: *portalHost 
+    ldap:
+      server: *ldapServer
+
